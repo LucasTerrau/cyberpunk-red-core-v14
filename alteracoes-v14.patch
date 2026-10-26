@@ -1,0 +1,484 @@
+diff -ruN --strip-trailing-cr a/main.css b/main.css
+--- a/main.css	2026-10-26 17:52:12.307243300 -0300
++++ b/main.css	2026-10-26 17:52:12.579720400 -0300
+@@ -1436,6 +1436,11 @@
+   flex-direction: column;
+   flex-wrap: nowrap;
+ }
++/* Foundry v13+ loads system CSS in a layer above core, so the generic flex rules above
++   would otherwise show every inactive tab (sidebar, sheets). Restore the core rule here. */
++.tab[data-tab]:not(.active) {
++  display: none;
++}
+ .flex-center {
+   display: flex;
+   align-items: center;
+diff -ruN --strip-trailing-cr a/modules/actor/cpr-black-ice.js b/modules/actor/cpr-black-ice.js
+--- a/modules/actor/cpr-black-ice.js	2026-10-26 17:52:11.714694000 -0300
++++ b/modules/actor/cpr-black-ice.js	2026-10-26 17:52:12.430796200 -0300
+@@ -26,7 +26,7 @@
+         bar1: { attribute: "stats.rez" },
+       };
+     }
+-    super.create(createData, options);
++    return super.create(createData, options);
+   }
+ 
+   /**
+diff -ruN --strip-trailing-cr a/modules/actor/cpr-container.js b/modules/actor/cpr-container.js
+--- a/modules/actor/cpr-container.js	2026-10-26 17:52:11.713184500 -0300
++++ b/modules/actor/cpr-container.js	2026-10-26 17:52:12.428737500 -0300
+@@ -23,7 +23,8 @@
+       createData.ownership = { default: 3 };
+     }
+     const newContainerActor = await super.create(createData, options);
+-    newContainerActor.setContainerType("shop");
++    await newContainerActor?.setContainerType("shop");
++    return newContainerActor;
+   }
+ 
+   /**
+diff -ruN --strip-trailing-cr a/modules/actor/cpr-demon.js b/modules/actor/cpr-demon.js
+--- a/modules/actor/cpr-demon.js	2026-10-26 17:52:11.624578300 -0300
++++ b/modules/actor/cpr-demon.js	2026-10-26 17:52:12.429772700 -0300
+@@ -25,7 +25,7 @@
+         bar1: { attribute: "stats.rez" },
+       };
+     }
+-    super.create(createData, options);
++    return super.create(createData, options);
+   }
+ 
+   /**
+diff -ruN --strip-trailing-cr a/modules/actor/cpr-mook.js b/modules/actor/cpr-mook.js
+--- a/modules/actor/cpr-mook.js	2026-10-26 17:52:11.640883600 -0300
++++ b/modules/actor/cpr-mook.js	2026-10-26 17:52:12.430796200 -0300
+@@ -26,6 +26,6 @@
+         bar1: { attribute: "derivedStats.hp" },
+       };
+     }
+-    super.create(createData, options);
++    return super.create(createData, options);
+   }
+ }
+diff -ruN --strip-trailing-cr a/modules/cpr-active-effect-sheet.js b/modules/cpr-active-effect-sheet.js
+--- a/modules/cpr-active-effect-sheet.js	2026-10-26 17:52:11.601293800 -0300
++++ b/modules/cpr-active-effect-sheet.js	2026-10-26 17:52:12.461127900 -0300
+@@ -6,9 +6,12 @@
+ 
+ /**
+  * Extend the base ActiveEffect class to implement system-specific logic.
+- * @extends {ActiveEffect}
++ * Foundry v13+ turned ActiveEffectConfig into an ApplicationV2, which ignores the V1 methods below,
++ * so this sheet now builds on the V1 DocumentSheet and carries the bits it used from the V1 config.
++ * @extends {DocumentSheet}
+  */
+-export default class CPRActiveEffectSheet extends ActiveEffectConfig {
++export default class CPRActiveEffectSheet extends foundry.appv1.api
++  .DocumentSheet {
+   /**
+    * We provide our own ActiveEffects sheet to improve the UX a bit. Specifically this
+    * allows us to implement user-readable keys for the mods, and different "usage" types.
+@@ -21,6 +24,8 @@
+     );
+ 
+     return foundry.utils.mergeObject(super.defaultOptions, {
++      classes: ["sheet", "active-effect-sheet"],
++      tabs: [{ navSelector: ".tabs", contentSelector: "form", initial: "details" }],
+       height: resizeCPRSheets ? 300 : "auto",
+       resizable: true,
+       // Submit on close to prevent an edge case where a user adds and active effect, but doesn't change anything.
+@@ -39,7 +44,7 @@
+    */
+   async getData() {
+     const data = await super.getData();
+-    const cprData = {};
++    const cprData = { effect: this.object, submitText: "EFFECT.Submit" };
+     // Convert Changes into CPRMods, which have a more convenient data structure.
+     const modList = CPRMod.getAllModifiers([this.object], true);
+ 
+@@ -143,6 +148,24 @@
+   }
+ 
+   /**
++   * Turn the "changes.N.*" form fields back into an array, as the V1 ActiveEffectConfig did.
++   *
++   * @override
++   * @param {Object} updateData - additional data to merge into the form data
++   * @return {Object} - the prepared update data
++   */
++  _getSubmitData(updateData = {}) {
++    const fd = new foundry.applications.ux.FormDataExtended(this.form, {
++      editors: this.editors,
++    });
++    const data = foundry.utils.expandObject(fd.object);
++    if (updateData)
++      foundry.utils.mergeObject(data, foundry.utils.expandObject(updateData));
++    data.changes = Array.from(Object.values(data.changes || {}));
++    return data;
++  }
++
++  /**
+    * Change the key category flag on an active effect.
+    * Also submit the form to prevent duplicate change keys on the same AE. (see _forceSubmit's jsdocs)
+    *
+diff -ruN --strip-trailing-cr a/modules/hooks/foundry/ui/item-folder-upgraded-display.js b/modules/hooks/foundry/ui/item-folder-upgraded-display.js
+--- a/modules/hooks/foundry/ui/item-folder-upgraded-display.js	2026-10-26 17:52:11.322084900 -0300
++++ b/modules/hooks/foundry/ui/item-folder-upgraded-display.js	2026-10-26 17:52:12.347207700 -0300
+@@ -55,6 +55,17 @@
+ }
+ 
+ /**
++ * Get the item id of a directory entry. Foundry v13+ uses data-entry-id, older versions data-document-id.
++ *
++ * @private
++ * @param {HTMLElement} element - a directory entry element
++ * @returns {String} - the item id
++ */
++function _entryId(element) {
++  return element.dataset.entryId ?? element.dataset.documentId;
++}
++
++/**
+  * Prepare the html for the install tree sub-list. To be appended after each item which contains
+  * other items
+  *
+@@ -63,7 +74,7 @@
+  * @returns {String} - HTML of the element's install tree
+  */
+ function _prepareSubList(element) {
+-  const item = game.items.get(element.dataset.documentId);
++  const item = game.items.get(_entryId(element));
+   // Only create a dropdown if the item has installed items & is not itself installed.
+   if (item.system.hasInstalled && !item.system.isInstalled) {
+     const showInstallFlag = game.user.getFlag(
+@@ -100,7 +111,7 @@
+  * @returns {String} - HTML for the chevron button.
+  */
+ function _prepareChevron(element) {
+-  const itemID = element.dataset.documentId;
++  const itemID = _entryId(element);
+   const showInstallFlag = game.user.getFlag(
+     game.system.id,
+     "showInstalledList"
+@@ -131,7 +142,8 @@
+  */
+ function _toggleInstalledVisibility(event) {
+   // Step 1: Prepare data
+-  const itemId = SystemUtils.GetEventDatum(event, "data-document-id");
++  const itemId = SystemUtils.GetEventDatum(event, "data-entry-id") ??
++    SystemUtils.GetEventDatum(event, "data-document-id");
+ 
+   // Step 2: Toggle the icon rotation to indicate state change.
+   const iconElement = event.currentTarget.querySelector("i");
+@@ -166,19 +178,21 @@
+  *
+  */
+ const renderItemDirHooks = () => {
+-  Hooks.on("renderItemDirectory", (_, html) => {
++  Hooks.on("renderItemDirectory", (_, directoryElement) => {
++    // Foundry v13+ passes an HTMLElement instead of jQuery.
++    const html = $(directoryElement);
+     const itemElements = html.find("li.item");
+ 
+     const hiddenElements = itemElements.filter((__, element) => {
+-      const item = game.items.get(element.dataset.documentId);
+-      return item.system.isInstalled;
++      const item = game.items.get(_entryId(element));
++      return item?.system.isInstalled;
+     });
+     hiddenElements.toggleClass("directory-item-hidden");
+ 
+     // Get elements that represent items which have other items installed in them.
+     const itemsWithInstalledElements = itemElements.filter((__, element) => {
+-      const item = game.items.get(element.dataset.documentId);
+-      return item.system.hasInstalled;
++      const item = game.items.get(_entryId(element));
++      return item?.system.hasInstalled;
+     });
+ 
+     // Append the list to each element that represents an item with installed items.
+diff -ruN --strip-trailing-cr a/modules/hooks/foundry/ui/pause-animation.js b/modules/hooks/foundry/ui/pause-animation.js
+--- a/modules/hooks/foundry/ui/pause-animation.js	2026-10-26 17:52:11.320573900 -0300
++++ b/modules/hooks/foundry/ui/pause-animation.js	2026-10-26 17:52:12.347207700 -0300
+@@ -13,6 +13,10 @@
+   Hooks.on("renderPause", () => {
+     enablePauseAnimation();
+   });
++  // Foundry v13+ renamed the pause application to GamePause.
++  Hooks.on("renderGamePause", () => {
++    enablePauseAnimation();
++  });
+ };
+ 
+ export default PauseAnimation;
+diff -ruN --strip-trailing-cr a/modules/hooks/token/add-dv-token-hud.js b/modules/hooks/token/add-dv-token-hud.js
+--- a/modules/hooks/token/add-dv-token-hud.js	2026-10-26 17:52:11.413347800 -0300
++++ b/modules/hooks/token/add-dv-token-hud.js	2026-10-26 17:52:12.344050300 -0300
+@@ -11,11 +11,16 @@
+    * @param {string} token - token data
+    */
+   Hooks.on("renderTokenHUD", async (hud, html, token) => {
++    // Foundry v13+ passes an HTMLElement and the render context instead of jQuery and token data.
++    const $html = $(html);
++    const tokenData = hud.document?.toObject() ?? token;
++    const render =
++      foundry.applications?.handlebars?.renderTemplate ?? renderTemplate;
+     const dvHudTemplate = `systems/${game.system.id}/templates/hud/dv.hbs`;
+-    const dvDisplay = await renderTemplate(dvHudTemplate, token.flags);
+-    html.find("div.left").append(dvDisplay);
+-    html.find(".dv-table-selector").click(() => {
+-      HudInterface.SetDvTable(token);
++    const dvDisplay = await render(dvHudTemplate, tokenData.flags);
++    $html.find("div.left").append(dvDisplay);
++    $html.find(".dv-table-selector").click(() => {
++      HudInterface.SetDvTable(tokenData);
+       hud.clear();
+     });
+   });
+diff -ruN --strip-trailing-cr a/modules/item/cpr-item.js b/modules/item/cpr-item.js
+--- a/modules/item/cpr-item.js	2026-10-26 17:52:11.123875800 -0300
++++ b/modules/item/cpr-item.js	2026-10-26 17:52:12.382676900 -0300
+@@ -33,7 +33,8 @@
+   static async create(data, options) {
+     const item = await super.create(data, options);
+     // Early return if has no installed, or its in a compendium.
+-    if (!item.system.hasInstalled || item.pack) return;
++    // Foundry v13+ createDialog opens the sheet of the returned document, so always return it.
++    if (!item || !item.system.hasInstalled || item.pack) return item;
+     // If this item is being imported into the world,
+     // and it has embedded installed item data in its flags.
+     if (!item.parent && item.flags.cprInstallTree) {
+diff -ruN --strip-trailing-cr a/modules/item/mixins/cpr-container.js b/modules/item/mixins/cpr-container.js
+--- a/modules/item/mixins/cpr-container.js	2026-10-26 17:52:11.249517700 -0300
++++ b/modules/item/mixins/cpr-container.js	2026-10-26 17:52:12.381164400 -0300
+@@ -283,7 +283,7 @@
+         : !!(await this.installWorldItems(itemList, installedItems));
+ 
+     // Rerender items directory for world items.
+-    if (!this.isEmbedded) ui.sidebar.tabs.items.render(true);
++    if (!this.isEmbedded) ui.items?.render(true);
+     return update;
+   };
+ 
+@@ -440,7 +440,7 @@
+     });
+ 
+     // Rerender items directory for world items.
+-    if (!this.isEmbedded) ui.sidebar.tabs.items.render(true);
++    if (!this.isEmbedded) ui.items?.render(true);
+     return updates;
+   };
+ 
+@@ -597,7 +597,7 @@
+       flags,
+       "system.installedItems.list": newInstalledList,
+     });
+-    ui.sidebar.tabs.items.render(true);
++    ui.items?.render(true);
+   };
+ 
+   /**
+diff -ruN --strip-trailing-cr a/modules/system/overrides.js b/modules/system/overrides.js
+--- a/modules/system/overrides.js	2026-10-26 17:52:11.063281400 -0300
++++ b/modules/system/overrides.js	2026-10-26 17:52:12.459616400 -0300
+@@ -1,49 +1,57 @@
++/**
++ * Build the DV text for a measured distance, using the DV table set on the controlled token
++ * (or the only owned character/mook token).
++ *
++ * @param {Number} distance - the measured distance
++ * @returns {String} - the DV text, or an empty string if there is no DV for this distance
++ */
++function getDvLabel(distance) {
++  let token = canvas.tokens.controlled["0"];
++  if (!token) {
++    const ownedTokens = canvas.tokens.ownedTokens.filter(
++      (t) =>
++        t.actor.constructor.name === "CPRCharacterActor" ||
++        t.actor.constructor.name === "CPRMookActor"
++    );
++    token = ownedTokens.length === 1 ? ownedTokens[0] : false;
++  }
++  if (!token) {
++    const noToken = game.i18n.localize("CPR.messages.warningRulerNoToken");
++    return `DV: ${noToken}`;
++  }
++  const DvTable = token.document.getFlag(game.system.id, "cprDvTable");
++  if (!DvTable || typeof DvTable !== "object") return "";
++  const displayTable = DvTable.name.replace(/^DV /, "");
++  const table = foundry.utils.duplicate(DvTable.table);
++  if (typeof table !== "object" || Object.keys(table).length === 0) return "";
++  let DV = 0;
++  for (const range of Object.keys(table)) {
++    const [start, end] = range.split("_");
++    if (
++      parseInt(distance, 10) >= parseInt(start, 10) &&
++      parseInt(distance, 10) <= parseInt(end, 10)
++    ) {
++      DV = table[range];
++    }
++  }
++  return DV > 0 ? `DV: ${DV} ${displayTable}` : "";
++}
++
+ export default function overrideRulerFunctions() {
+-  const foundryPrototype = Ruler.prototype._getSegmentLabel;
+-  Ruler.prototype._getSegmentLabel = function _getSegmentLabel(
+-    segment,
+-    totalDistance
+-  ) {
+-    const { distance } = segment;
+-    let returnLabel = foundryPrototype.call(this, segment, totalDistance);
+-    if (this.user.isSelf) {
+-      let token = canvas.tokens.controlled["0"];
+-      if (!token) {
+-        const ownedTokens = canvas.tokens.ownedTokens.filter(
+-          (t) =>
+-            t.actor.constructor.name === "CPRCharacterActor" ||
+-            t.actor.constructor.name === "CPRMookActor"
+-        );
+-        token = ownedTokens.length === 1 ? ownedTokens[0] : false;
+-      }
+-      if (token) {
+-        const DvTable = token.document.getFlag(game.system.id, "cprDvTable");
+-        if (DvTable && typeof DvTable === "object") {
+-          const displayTable = DvTable.name.replace(/^DV /, "");
+-          const table = foundry.utils.duplicate(DvTable.table);
+-          if (typeof table === "object" && Object.keys(table).length > 0) {
+-            let DV = 0;
+-            for (const range of Object.keys(table)) {
+-              const [start, end] = range.split("_");
+-              if (
+-                parseInt(distance, 10) >= parseInt(start, 10) &&
+-                parseInt(distance, 10) <= parseInt(end, 10)
+-              ) {
+-                DV = table[range];
+-              }
+-            }
+-            if (DV > 0) {
+-              returnLabel = `${returnLabel}\nDV: ${DV} ${displayTable}`;
+-            }
+-          }
+-        }
+-      } else {
+-        const noToken = game.i18n.localize("CPR.messages.warningRulerNoToken");
+-        returnLabel = `${returnLabel}\nDV: ${noToken}`;
++  // Foundry v13+ rewrote the Ruler: labels come from _getWaypointLabelContext and a template.
++  const BaseRuler = CONFIG.Canvas.rulerClass;
++  class CPRRuler extends BaseRuler {
++    static WAYPOINT_LABEL_TEMPLATE = `systems/${game.system.id}/templates/hud/waypoint-label.hbs`;
++
++    _getWaypointLabelContext(waypoint, state) {
++      const context = super._getWaypointLabelContext(waypoint, state);
++      if (context && this.user.isSelf) {
++        context.cprDv = getDvLabel(waypoint.measurement.distance);
+       }
++      return context;
+     }
+-    return returnLabel;
+-  };
++  }
++  CONFIG.Canvas.rulerClass = CPRRuler;
+ }
+ 
+ const foundryValidate = foundry.abstract.DataModel.prototype.validate;
+diff -ruN --strip-trailing-cr a/system.json b/system.json
+--- a/system.json	2026-10-26 17:52:12.317262600 -0300
++++ b/system.json	2026-10-26 17:52:12.585816000 -0300
+@@ -8,8 +8,8 @@
+   "description": "Implementation of the Cyberpunk RED, Core Rules, for FVTT",
+   "compatibility": {
+     "minimum": 12,
+-    "verified": 12,
+-    "maximum": 12
++    "verified": 14,
++    "maximum": 14
+   },
+   "authors": [
+     {
+diff -ruN --strip-trailing-cr a/templates/effects/cpr-active-effect-sheet.hbs b/templates/effects/cpr-active-effect-sheet.hbs
+--- a/templates/effects/cpr-active-effect-sheet.hbs	2026-10-26 17:52:12.036959000 -0300
++++ b/templates/effects/cpr-active-effect-sheet.hbs	2026-10-26 17:52:12.568469600 -0300
+@@ -9,25 +9,25 @@
+     </header>
+     <!-- Effect Configuration Tabs -->
+     <nav class="sheet-tabs tabs">
+-      <a class="item" data-tab="details"><i class="fas fa-book"></i> {{localize "EFFECT.TabDetails"}}</a>
+-      <a class="item" data-tab="effects"><i class="fas fa-gears"></i> {{localize "EFFECT.TabEffects"}}</a>
++      <a class="item" data-tab="details"><i class="fas fa-book"></i> {{localize "EFFECT.TABS.details"}}</a>
++      <a class="item" data-tab="effects"><i class="fas fa-gears"></i> {{localize "EFFECT.TABS.changes"}}</a>
+     </nav>
+     <!-- Details Tab -->
+     <section class="tab" data-tab="details">
+       <div class="form-group">
+-        <label>{{ localize "EFFECT.Name" }}</label>
++        <label>{{ localize "EFFECT.FIELDS.name.label" }}</label>
+         <div class="form-fields">
+           <input type="text" name="name" value="{{effect.name}}"/>
+         </div>
+       </div>
+       <div class="form-group">
+-        <label>{{ localize "EFFECT.Image" }}</label>
++        <label>{{ localize "EFFECT.FIELDS.img.label" }}</label>
+         <div class="form-fields">
+           <file-picker type="image" name="img" value="{{effect.img}}">
+         </div>
+       </div>
+       <div class="form-group">
+-        <label>{{ localize "EFFECT.Tint" }}</label>
++        <label>{{ localize "EFFECT.FIELDS.tint.label" }}</label>
+         <div class="form-fields">
+           <input class="color" type="text" name="tint" value="{{effect.tint}}"/>
+           <input type="color" value="{{effect.tint}}" data-edit="tint"/>
+@@ -38,9 +38,9 @@
+     <section class="tab" data-tab="effects">
+       <ol class="changes-list">
+         <header class="change-header flexrow">
+-          <div class="change-key">{{ localize "EFFECT.ChangeKey" }}</div>
+-          <div class="change-value">{{ localize "EFFECT.ChangeValue" }}</div>
+-          <div class="change-mode">{{ localize "EFFECT.ChangeMode" }}</div>
++          <div class="change-key">{{ localize "EFFECT.FIELDS.changes.element.key.label" }}</div>
++          <div class="change-value">{{ localize "EFFECT.FIELDS.changes.element.value.label" }}</div>
++          <div class="change-mode">{{ localize "EFFECT.FIELDS.changes.element.type.label" }}</div>
+           <div class="situational">
+             {{ localize "CPR.effectSheet.header.situational" }}
+           </div>
+diff -ruN --strip-trailing-cr a/templates/hud/waypoint-label.hbs b/templates/hud/waypoint-label.hbs
+--- a/templates/hud/waypoint-label.hbs	1969-12-31 21:00:00.000000000 -0300
++++ b/templates/hud/waypoint-label.hbs	2026-10-26 17:52:12.566957500 -0300
+@@ -0,0 +1,34 @@
++{{!-- Copy of Foundry's templates/hud/waypoint-label.hbs (v14) with the CPR DV line added --}}
++<div class="waypoint-label {{cssClass}}">
++    {{#if action.img}}
++    <div class="img" style="background-image: url('{{ action.img }}');"></div>
++    {{else if action.icon}}
++    <i class="icon {{action.icon}}"></i>
++    {{else if action.label}}
++    <label class="action-label">{{localize action.label}}</label>
++    {{/if}}
++    {{#if cost}}
++    <span class="total-measurement">{{cost.total}} {{cost.units}}</span>
++    {{#if cost.delta}}
++    <span class="delta-measurement">({{cost.delta}})</span>
++    {{/if}}
++    {{else}}
++    <span class="total-measurement">{{distance.total}} {{units}}</span>
++    {{#if distance.delta}}
++    <span class="delta-measurement">({{distance.delta}})</span>
++    {{/if}}
++    {{/if}}
++    {{#if (and elevation (not elevation.hidden))}}
++    <i class="icon {{elevation.icon}}"></i>
++    <span class="total-elevation">{{elevation.total}} {{units}}</span>
++    {{#if elevation.delta}}
++    <span class="delta-elevation">({{elevation.delta}})</span>
++    {{/if}}
++    {{/if}}
++    {{#if secret}}
++    <i class="icon fa-solid fa-eye-slash"></i>
++    {{/if}}
++    {{#if cprDv}}
++    <span class="cpr-ruler-dv">{{cprDv}}</span>
++    {{/if}}
++</div>
